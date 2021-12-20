@@ -10,18 +10,18 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 import tensorflow_probability as tfp
 from sklearn.model_selection import train_test_split
+
 tfd = tfp.distributions
 import argparse
-
 
 # integrated constraint model
 class ConstraintModel(object):
     def __init__(self, feature, count, feature_val, count_val,
                  n_hidden=None, dropout_rate=0.5,
-                 l2_reg = 0., grid_points=1000):
+                 l2_reg=0., grid_points=1000):
         # currently only support float32
         self.dtype = 'float32'
-        
+
         # training data
         self.count = tf.convert_to_tensor(count, self.dtype)
         self.feature = tf.convert_to_tensor(feature, self.dtype)
@@ -29,15 +29,15 @@ class ConstraintModel(object):
         # validation data
         self.count_val = tf.convert_to_tensor(count_val, self.dtype)
         self.feature_val = tf.convert_to_tensor(feature_val, self.dtype)
-        
+
         # grid for numerical integration
-        self.grid = np.arange(0.5/grid_points, 1.,
-                              1./grid_points)[np.newaxis, :]
+        self.grid = np.arange(0.5 / grid_points, 1.,
+                              1. / grid_points)[np.newaxis, :]
         self.grid = tf.convert_to_tensor(self.grid, self.dtype)
-        
+
         # input for keras model
         feature_input = Input(shape=(feature.shape[1],), dtype=self.dtype)
-        
+
         # network without likelihood (keras model)
         self.network = ConstraintModel.build_network(feature.shape[1],
                                                      n_hidden,
@@ -47,7 +47,7 @@ class ConstraintModel(object):
         # build model for training
         dist = self.network(feature_input)
         self.training_model = Model(inputs=feature_input, outputs=dist)
-        
+
     def fit(self, model_save_file, learning_rate=0.01, batch_size=64, epochs=10, patience=5):
         callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss',
                                                     restore_best_weights=True,
@@ -56,11 +56,11 @@ class ConstraintModel(object):
         model_saver = tf.keras.callbacks.ModelCheckpoint(model_save_file,
                                                          save_best_only=True,
                                                          monitor='val_loss')
-        
+
         # compile model
         self.training_model.compile(Adam(learning_rate=learning_rate),
                                     loss=self.nll)
-        
+
         # fit model
         print(self.training_model.summary())
         self.history = self.training_model.fit(self.feature, self.count,
@@ -74,48 +74,48 @@ class ConstraintModel(object):
 
     def predict(self, feature, count):
         y = tf.convert_to_tensor(count, self.dtype)
-        
+
         # beta prior
         pred_dist = self.training_model(feature)
         prior = pred_dist.log_prob(self.grid)
-        
+
         # observed count
         obs_count = y[:, 0][:, tf.newaxis]
-        
+
         # expected count without selection
         exp_count = y[:, 1][:, tf.newaxis]
-        
+
         # predicted rate with selection
         rate = exp_count * self.grid
-        
+
         # partial likelihood without Beta prior
         lik = tfd.Poisson(rate).log_prob(obs_count)
-        
+
         prob = tf.math.exp(lik + prior)
-        prob = prob / tf.math.reduce_sum(prob, axis = 1, keepdims=True)
+        prob = prob / tf.math.reduce_sum(prob, axis=1, keepdims=True)
         relative_rate = tf.math.reduce_sum(prob * self.grid, axis=1)
         constraint = 1 - relative_rate
         return constraint.numpy(), 1 - pred_dist.mean().numpy().flatten()
-        
+
     def nll(self, y, dist):
         # observed count
         obs_count = y[:, 0][:, tf.newaxis]
-        
+
         # expected count without selection
         exp_count = y[:, 1][:, tf.newaxis]
-        
+
         # predicted rate with selection
         rate = exp_count * self.grid
-        
+
         # Beta prior
         prior = dist.log_prob(self.grid)
-        
+
         # partial likelihood without Beta prior
         lik = tfd.Poisson(rate).log_prob(obs_count)
 
         ll = tfp.math.reduce_logmeanexp(lik + prior, axis=1)
         return -ll
-    
+
     @staticmethod
     def beta_dist(params):
         mean = tf.math.sigmoid(params[:, 0])
@@ -124,15 +124,15 @@ class ConstraintModel(object):
         beta = (1. - mean) * kappa
         return tfd.Beta(alpha[:, tf.newaxis],
                         beta[:, tf.newaxis])
- 
+
     @staticmethod
     def build_network(n_feat, n_hidden, dropout_rate, l2_reg,
                       dtype, activation='relu'):
         # input
         inputs = Input(shape=(n_feat,))
-        
+
         regularizer = tf.keras.regularizers.l2(l2_reg)
-        
+
         if n_hidden is None:
             params = Dense(2, dtype=dtype)(inputs)
         else:
@@ -142,7 +142,7 @@ class ConstraintModel(object):
                                kernel_regularizer=regularizer)(hidden)
                 hidden = Dropout(rate=dropout_rate, dtype=dtype)(hidden)
             params = Dense(2, dtype=dtype)(hidden)
-            
+
         dist = tfp.layers.DistributionLambda(ConstraintModel.beta_dist)(params)
         return Model(inputs=inputs, outputs=dist, name='betaOutputLayer')
 
@@ -180,9 +180,6 @@ if __name__ == '__main__':
     parser.add_argument('--validation-fraction', dest='validation_fraction', type=float, required=False,
                         default=0.2, help='proportion of data for validation')
 
-    parser.add_argument('--batch-size', dest='batch', type=int, required=False,
-                        default=64, help='batch size')
-
     parser.add_argument('--data-seed', dest='data_seed', type=int, required=False,
                         default=None, help='random seed for spliting data')
 
@@ -203,10 +200,13 @@ if __name__ == '__main__':
 
     if args.data_seed is not None:
         feature_train, feature_val, count_train, count_val = train_test_split(feature,
-                count_data, test_size=args.validation_fraction, random_state=args.data_seed)
+                                                                              count_data,
+                                                                              test_size=args.validation_fraction,
+                                                                              random_state=args.data_seed)
     else:
         feature_train, feature_val, count_train, count_val = train_test_split(feature,
-                count_data, test_size=args.validation_fraction)
+                                                                              count_data,
+                                                                              test_size=args.validation_fraction)
 
     model = ConstraintModel(feature_train, count_train, feature_val, count_val,
                             n_hidden=args.hidden, dropout_rate=args.dropout,
@@ -216,7 +216,7 @@ if __name__ == '__main__':
 
     constraint, constraint_by_feature = model.predict(feature, count_data)
     out_data = pd.DataFrame.from_dict({df.columns[0]: df.iloc[:, 0],
-        'DeepLOF_score': constraint})
+                                       'DeepLOF_score': constraint})
 
     out_data.to_csv(args.output, index=False, sep='\t')
 
